@@ -4,12 +4,12 @@ local gfx = require("core.gfx")
 local lg = love.graphics
 
 local ui = {
-  THUMB_W = 256,
-  THUMB_H = 144,
+  THUMB_W = 192,
+  THUMB_H = 108,
 }
 
-local COLS, GAP_X, GAP_Y, TOP = 4, 28, 14, 122
-local ROW_H = ui.THUMB_H + 34
+local COLS, GAP_X, GAP_Y, TOP = 6, 14, 22, 128
+local ROW_H = ui.THUMB_H + 44
 local LEFT = (1280 - (COLS * ui.THUMB_W + (COLS - 1) * GAP_X)) / 2
 
 function ui.init()
@@ -35,7 +35,7 @@ function ui.galleryHit(x, y, n)
   end
 end
 
-function ui.drawGallery(scenes, thumbs, hover, time)
+function ui.drawGallery(styles, thumbs, hover, time)
   lg.push("all")
   ui.bg = ui.bg or gfx.vgradient(1280, 720, {
     { 0, gfx.rgb("#1b1530") }, { 1, gfx.rgb("#0b0a12") },
@@ -48,10 +48,13 @@ function ui.drawGallery(scenes, thumbs, hover, time)
   lg.printf("LÖVE Style Showcase", 0, 26, 1280, "center")
   lg.setFont(ui.fonts.body)
   lg.setColor(gfx.hex("#b9b0d6"))
-  lg.printf("12 art styles  ·  zero image files  ·  every pixel is drawn by Lua code at runtime",
-    0, 78, 1280, "center")
+  local total = 0
+  for _, st in ipairs(styles) do total = total + #st.scenes end
+  lg.printf(("%d art styles  ·  %d scenes  ·  zero image files  ·  every pixel is drawn by Lua code at runtime"):format(#styles, total),
+    0, 80, 1280, "center")
 
-  for i, s in ipairs(scenes) do
+  for i, st in ipairs(styles) do
+    local s = st.scenes[1]
     local x, y = thumbPos(i)
     local lift = (hover == i) and -4 or 0
     lg.setColor(0, 0, 0, 0.45)
@@ -68,26 +71,38 @@ function ui.drawGallery(scenes, thumbs, hover, time)
     lg.setLineWidth(hover == i and 3 or 1)
     lg.setColor(hover == i and { gfx.hex("#ffd36e") } or { 1, 1, 1, 0.18 })
     lg.rectangle("line", x, y + lift, ui.THUMB_W, ui.THUMB_H, 8)
+    if #st.scenes > 1 then
+      local badge = ("%d scenes"):format(#st.scenes)
+      lg.setFont(ui.fonts.small)
+      local bw = ui.fonts.small:getWidth(badge) + 14
+      lg.setColor(0, 0, 0, 0.7)
+      lg.rectangle("fill", x + ui.THUMB_W - bw - 6, y + lift + 6, bw, 18, 9)
+      lg.setColor(gfx.hex("#ffd36e"))
+      lg.print(badge, x + ui.THUMB_W - bw + 1, y + lift + 8)
+    end
     lg.setFont(ui.fonts.label)
     lg.setColor(gfx.hex("#ffe9b0"))
-    lg.print(("%02d  %s"):format(i, s.title), x + 2, y + ui.THUMB_H + 8)
+    lg.print(("%02d  %s"):format(i, s.title), x + 2, y + ui.THUMB_H + 6)
     lg.setFont(ui.fonts.small)
     lg.setColor(gfx.hex("#8e86ad"))
-    lg.printf(s.subtitle or "", x, y + ui.THUMB_H + 10, ui.THUMB_W - 2, "right")
+    lg.print(s.subtitle or "", x + 2, y + ui.THUMB_H + 25)
   end
 
   lg.setFont(ui.fonts.small)
   lg.setColor(gfx.hex("#8e86ad"))
-  lg.printf("Click a style  ·  Left/Right next/previous  ·  I toggles the info panel  ·  Esc back / quit  ·  F12 screenshot",
+  lg.printf("Click a style  ·  Left/Right: next style  ·  Up/Down: other scenes of a style  ·  I: info panel  ·  Esc: back / quit  ·  F12: screenshot",
     0, 700, 1280, "center")
   lg.pop()
 end
 
 local INFO_BTN = { x = 1280 - 14 - 176, y = 14, w = 176, h = 34 }
+local variantBtn = nil -- set while drawing the HUD
+
+local function inside(r, x, y) return r and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h end
 
 function ui.hudHit(x, y)
-  local b = INFO_BTN
-  if x >= b.x and x <= b.x + b.w and y >= b.y and y <= b.y + b.h then return "info" end
+  if inside(INFO_BTN, x, y) then return "info" end
+  if inside(variantBtn, x, y) then return "variant" end
 end
 
 local function section(title, items, x, y, w, color)
@@ -106,17 +121,32 @@ local function section(title, items, x, y, w, color)
   return y + 10
 end
 
-function ui.drawHud(s, index, count, showInfo)
+-- info = { index, count, variant, variants }
+function ui.drawHud(s, info, showInfo)
   lg.setShader()
   lg.setBlendMode("alpha")
   -- Title pill (top-left)
   lg.setFont(ui.fonts.h2)
-  local label = ("%02d / %02d   %s"):format(index, count, s.title)
+  local label = ("%02d / %02d   %s"):format(info.index, info.count, s.title)
   local w = ui.fonts.h2:getWidth(label) + 28
   lg.setColor(0, 0, 0, 0.55)
   lg.rectangle("fill", 14, 14, w, 34, 17)
   lg.setColor(1, 1, 1, 0.95)
   lg.print(label, 28, 19)
+
+  -- Scene pill: which scene of this style, click (or Up/Down) for the next one
+  variantBtn = nil
+  if info.variants > 1 then
+    lg.setFont(ui.fonts.label)
+    local vl = ("Scene %d/%d: %s   (Up/Down)"):format(info.variant, info.variants, s.subtitle or "")
+    local vw = ui.fonts.label:getWidth(vl) + 26
+    variantBtn = { x = 14 + w + 8, y = 14, w = vw, h = 34 }
+    lg.setColor(0.25, 0.18, 0.02, 0.75)
+    lg.rectangle("fill", variantBtn.x, 14, vw, 34, 17)
+    lg.setColor(gfx.hex("#ffd36e"))
+    lg.print(vl, variantBtn.x + 13, 22)
+    w = w + vw + 8
+  end
 
   -- "How it's made" toggle (top-right)
   local b = INFO_BTN
@@ -128,7 +158,7 @@ function ui.drawHud(s, index, count, showInfo)
 
   -- Controls hint, next to the title
   lg.setFont(ui.fonts.small)
-  local hint = "Left/Right: switch style   Esc: gallery"
+  local hint = "Left/Right: style   Esc: gallery"
   local hw = ui.fonts.small:getWidth(hint) + 24
   lg.setColor(0, 0, 0, 0.45)
   lg.rectangle("fill", 14 + w + 8, 20, hw, 22, 11)
