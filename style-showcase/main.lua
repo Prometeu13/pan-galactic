@@ -20,30 +20,31 @@ local ui = require("core.ui")
 
 -- Each line is one style; the first scene id is the one shown in the gallery.
 local STYLES = {
-  { "cartoon" },
+  { "cartoon", "cartoon_monsters", "cartoon_pirates" },
   { "pixel", "pixel_dungeon", "pixel_gameboy" },
-  { "noir" },
+  { "noir", "noir_office", "noir_pier" },
   { "romantic", "romantic_cafe", "romantic_lanterns" },
-  { "adventure" },
+  { "adventure", "adventure_jungle", "adventure_sky" },
   { "realistic", "realistic_aurora", "realistic_dunes" },
-  { "space" },
-  { "neon" },
-  { "horror" },
-  { "lowpoly" },
+  { "space", "space_station", "space_surface" },
+  { "neon", "neon_alley", "neon_tunnel" },
+  { "horror", "horror_hallway", "horror_graveyard" },
+  { "lowpoly", "lowpoly_iceberg", "lowpoly_stag" },
   { "sketch", "sketch_chalk", "sketch_blueprint" },
   { "isometric", "isometric_city", "isometric_tactics" },
-  { "watercolor" },
-  { "inkwash" },
-  { "comic" },
-  { "papercraft" },
-  { "underwater" },
+  { "watercolor", "watercolor_birches", "watercolor_koi" },
+  { "inkwash", "inkwash_plum", "inkwash_gorge" },
+  { "comic", "comic_cover", "comic_western" },
+  { "papercraft", "papercraft_sea", "papercraft_town" },
+  { "underwater", "underwater_wreck", "underwater_abyss" },
 }
 
 local styles = {}        -- { title = ..., scenes = { scene modules } }
 local allScenes = {}     -- every scene in gallery order (for --tour, --snapshots, --selftest)
 local cur = nil          -- { s = style index, v = scene index } or nil for the gallery
 local showInfo = false   -- the "How it's made" panel; toggle with I
-local thumbs = {}        -- one small canvas per style for the gallery
+local thumbQueue = {}    -- scenes still waiting for a gallery thumbnail (made a few per second)
+local thumbTimer = 0
 local galleryHover = nil
 local time = 0
 local tour = nil         -- { every = seconds, left = seconds, i = index into allScenes }
@@ -94,25 +95,54 @@ local function drawHudFor(s, info, open)
   love.graphics.pop()
 end
 
+-- Render a scene into a small canvas for the gallery.
+local function makeThumb(s, alreadyRunning)
+  if not alreadyRunning then warmUp(s, s.warmup or 2) end
+  drawScene(s)
+  -- Downscale in two steps so the thumbnail isn't aliased.
+  local half = love.graphics.newCanvas(640, 360)
+  love.graphics.push("all")
+  love.graphics.setCanvas(half)
+  love.graphics.clear()
+  love.graphics.setBlendMode("alpha", "premultiplied")
+  love.graphics.draw(view.canvas, 0, 0, 0, 0.5, 0.5)
+  local t = love.graphics.newCanvas(ui.THUMB_W, ui.THUMB_H)
+  love.graphics.setCanvas(t)
+  love.graphics.clear()
+  love.graphics.draw(half, 0, 0, 0, ui.THUMB_W / 640, ui.THUMB_H / 360)
+  love.graphics.pop()
+  return t
+end
+
+-- The first scene of every style gets its thumbnail right away. The others are queued
+-- and made one at a time while the gallery is on screen, so start-up stays quick.
 local function makeThumbs()
-  for i, st in ipairs(styles) do
-    local s = st.scenes[1]
-    warmUp(s, s.warmup or 2)
-    drawScene(s)
-    -- Downscale in two steps so the thumbnail isn't aliased.
-    local half = love.graphics.newCanvas(640, 360)
-    love.graphics.push("all")
-    love.graphics.setCanvas(half)
-    love.graphics.clear()
-    love.graphics.setBlendMode("alpha", "premultiplied")
-    love.graphics.draw(view.canvas, 0, 0, 0, 0.5, 0.5)
-    local t = love.graphics.newCanvas(ui.THUMB_W, ui.THUMB_H)
-    love.graphics.setCanvas(t)
-    love.graphics.clear()
-    love.graphics.draw(half, 0, 0, 0, ui.THUMB_W / 640, ui.THUMB_H / 360)
-    love.graphics.pop()
-    thumbs[i] = t
+  for _, st in ipairs(styles) do
+    st.scenes[1]._thumb = makeThumb(st.scenes[1])
   end
+  for vi = 2, 9 do
+    for _, st in ipairs(styles) do
+      if st.scenes[vi] then thumbQueue[#thumbQueue + 1] = st.scenes[vi] end
+    end
+  end
+end
+
+-- Thumbnail for a scene nobody has opened yet: load it, draw it once, then forget
+-- everything it created, so 50 scenes' canvases don't all stay in memory. It loads
+-- again normally when you open it.
+local function thumbAndRelease(s)
+  if s._loaded then
+    s._thumb = makeThumb(s, true)       -- you've already opened it: leave it as it is
+    return
+  end
+  local before = {}
+  for k in pairs(s) do before[k] = true end
+  local thumb = makeThumb(s)
+  for k in pairs(s) do
+    if not before[k] then s[k] = nil end
+  end
+  s._thumb = thumb
+  collectgarbage()
 end
 
 local function snapshots()
@@ -126,13 +156,23 @@ local function snapshots()
     print("  " .. name)
   end
   -- The gallery itself, and one scene with the info panel open.
-  makeThumbs()
+  for _, st in ipairs(styles) do
+    for _, s in ipairs(st.scenes) do s._thumb = makeThumb(s) end
+  end
   love.graphics.push("all")
   love.graphics.setCanvas({ view.canvas, stencil = true })
-  ui.drawGallery(styles, thumbs, nil, 0)
+  ui.drawGallery(styles, nil, 0)
   love.graphics.pop()
   view.canvas:newImageData():encode("png", "snapshots/00_gallery.png")
   print("  snapshots/00_gallery.png")
+  -- the gallery rotates through each style's scenes: two more frames, 5 s apart
+  for k = 2, 3 do
+    love.graphics.push("all")
+    love.graphics.setCanvas({ view.canvas, stencil = true })
+    ui.drawGallery(styles, nil, (k - 1) * 5)
+    love.graphics.pop()
+    view.canvas:newImageData():encode("png", ("snapshots/00_gallery_%d.png"):format(k))
+  end
   local k = math.min(4, #styles)
   cur = { s = k, v = 1 }
   drawScene(styles[k].scenes[1])
@@ -145,6 +185,13 @@ end
 
 -- Smoke test: every scene loads, updates, handles input and draws without errors.
 local function selftest()
+  -- gallery path first: make a thumbnail and release the scene; the loop below then
+  -- proves every scene still loads and runs after that
+  for _, s in ipairs(allScenes) do thumbAndRelease(s) end
+  love.graphics.push("all")
+  love.graphics.setCanvas({ view.canvas, stencil = true })
+  for k = 0, 12 do ui.drawGallery(styles, k % 3 == 0 and 2 or nil, k * 1.3) end
+  love.graphics.pop()
   for i, s in ipairs(allScenes) do
     warmUp(s, 1)
     if s.mousepressed then
@@ -262,6 +309,12 @@ function love.update(dt)
   else
     local mx, my = view.mouse()
     galleryHover = ui.galleryHit(mx, my, #styles)
+    -- fill in the remaining thumbnails a few per second, so the gallery stays smooth
+    thumbTimer = thumbTimer - dt
+    if #thumbQueue > 0 and thumbTimer <= 0 then
+      thumbAndRelease(table.remove(thumbQueue, 1))
+      thumbTimer = 0.3
+    end
   end
 end
 
@@ -277,7 +330,7 @@ function love.draw()
     ui.drawHud(s, hudInfo(), showInfo)
     love.graphics.pop()
   else
-    ui.drawGallery(styles, thumbs, galleryHover, time)
+    ui.drawGallery(styles, galleryHover, time)
   end
   love.graphics.pop()
   view.present()
@@ -309,7 +362,7 @@ function love.keypressed(key)
       if s.keypressed then s:keypressed(key) end
     end
   else
-    if key == "return" or key == "space" then goTo(galleryHover or 1, 1) end
+    if key == "return" or key == "space" then goTo(galleryHover or 1, ui.shownVariant(galleryHover or 1)) end
   end
 end
 
@@ -323,7 +376,7 @@ function love.mousepressed(x, y, button)
     if s.mousepressed then s:mousepressed(vx, vy, button) end
   else
     local i = ui.galleryHit(vx, vy, #styles)
-    if i then goTo(i, 1) end
+    if i then goTo(i, ui.shownVariant(i)) end   -- opens the scene the thumbnail is showing
   end
 end
 

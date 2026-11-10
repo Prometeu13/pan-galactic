@@ -35,7 +35,32 @@ function ui.galleryHit(x, y, n)
   end
 end
 
-function ui.drawGallery(styles, thumbs, hover, time)
+-- Which scene of style i the gallery is showing right now. Thumbnails take turns:
+-- each style switches every few seconds (out of step with its neighbours) and
+-- cross-fades to the next scene that already has a thumbnail.
+local shown = {}
+local HOLD, FADE = 5, 0.6
+
+local function pick(st, i, time)
+  local ready = {}
+  for vi, s in ipairs(st.scenes) do
+    if s._thumb then ready[#ready + 1] = vi end
+  end
+  if #ready == 0 then return nil end
+  local clock = time + i * 1.7
+  local k = math.floor(clock / HOLD) % #ready + 1
+  local into = clock % HOLD
+  local nextV, mix = nil, 0
+  if #ready > 1 and into > HOLD - FADE then
+    nextV = ready[k % #ready + 1]
+    mix = (into - (HOLD - FADE)) / FADE
+  end
+  return ready[k], nextV, mix
+end
+
+function ui.shownVariant(i) return shown[i] or 1 end
+
+function ui.drawGallery(styles, hover, time)
   lg.push("all")
   ui.bg = ui.bg or gfx.vgradient(1280, 720, {
     { 0, gfx.rgb("#1b1530") }, { 1, gfx.rgb("#0b0a12") },
@@ -54,17 +79,25 @@ function ui.drawGallery(styles, thumbs, hover, time)
     0, 80, 1280, "center")
 
   for i, st in ipairs(styles) do
-    local s = st.scenes[1]
     local x, y = thumbPos(i)
     local lift = (hover == i) and -4 or 0
+    local vi, nextV, mix = pick(st, i, time)
+    -- a hovered style holds still, so what you click is what you saw
+    if hover == i and shown[i] and st.scenes[shown[i]]._thumb then vi, nextV, mix = shown[i], nil, 0 end
+    shown[i] = vi or 1
+    local s = st.scenes[shown[i]]
     lg.setColor(0, 0, 0, 0.45)
     lg.rectangle("fill", x + 4, y + 6, ui.THUMB_W, ui.THUMB_H, 8)
-    if thumbs[i] then
-      lg.setColor(1, 1, 1)
+    if vi then
       lg.stencil(function() lg.rectangle("fill", x, y + lift, ui.THUMB_W, ui.THUMB_H, 8) end, "replace", 1)
       lg.setStencilTest("greater", 0)
       lg.setBlendMode("alpha", "premultiplied")
-      lg.draw(thumbs[i], x, y + lift)
+      lg.setColor(1, 1, 1)
+      lg.draw(s._thumb, x, y + lift)
+      if nextV then
+        lg.setColor(mix, mix, mix, mix)
+        lg.draw(st.scenes[nextV]._thumb, x, y + lift)
+      end
       lg.setBlendMode("alpha")
       lg.setStencilTest()
     end
@@ -72,13 +105,16 @@ function ui.drawGallery(styles, thumbs, hover, time)
     lg.setColor(hover == i and { gfx.hex("#ffd36e") } or { 1, 1, 1, 0.18 })
     lg.rectangle("line", x, y + lift, ui.THUMB_W, ui.THUMB_H, 8)
     if #st.scenes > 1 then
-      local badge = ("%d scenes"):format(#st.scenes)
-      lg.setFont(ui.fonts.small)
-      local bw = ui.fonts.small:getWidth(badge) + 14
-      lg.setColor(0, 0, 0, 0.7)
-      lg.rectangle("fill", x + ui.THUMB_W - bw - 6, y + lift + 6, bw, 18, 9)
-      lg.setColor(gfx.hex("#ffd36e"))
-      lg.print(badge, x + ui.THUMB_W - bw + 1, y + lift + 8)
+      -- one dot per scene; the lit one is the scene on show
+      local n = #st.scenes
+      local bw = n * 12 + 10
+      lg.setColor(0, 0, 0, 0.6)
+      lg.rectangle("fill", x + ui.THUMB_W - bw - 6, y + lift + 6, bw, 16, 8)
+      for k = 1, n do
+        local on = (k == shown[i])
+        lg.setColor(on and { gfx.hex("#ffd36e") } or { 1, 1, 1, st.scenes[k]._thumb and 0.45 or 0.15 })
+        lg.circle("fill", x + ui.THUMB_W - bw + 5 + (k - 1) * 12, y + lift + 14, on and 4 or 3)
+      end
     end
     lg.setFont(ui.fonts.label)
     lg.setColor(gfx.hex("#ffe9b0"))
@@ -90,7 +126,7 @@ function ui.drawGallery(styles, thumbs, hover, time)
 
   lg.setFont(ui.fonts.small)
   lg.setColor(gfx.hex("#8e86ad"))
-  lg.printf("Click a style  ·  Left/Right: next style  ·  Up/Down: other scenes of a style  ·  I: info panel  ·  Esc: back / quit  ·  F12: screenshot",
+  lg.printf("Click a thumbnail to open the scene it shows  ·  Left/Right: next style  ·  Up/Down: other scenes of a style  ·  I: info panel  ·  Esc: back / quit  ·  F12: screenshot",
     0, 700, 1280, "center")
   lg.pop()
 end
